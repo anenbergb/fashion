@@ -28,7 +28,7 @@ class Style128Net(object):
       mode: One of 'train' and 'eval'.
     """
     self.hps = hps
-    self.images_placeholder = images
+    self.images = images
     self.mode = mode
 
   def build_graph(self):
@@ -38,6 +38,9 @@ class Style128Net(object):
     if self.mode == 'train':
       self._set_learning_rate()
       self._build_train_op()
+    #record images
+    tf.image_summary('fashion', self.images, max_images=100)
+
     # Build the summary operation based on the TF collection of Summaries.
     self.summaries = tf.merge_all_summaries()
 
@@ -47,7 +50,7 @@ class Style128Net(object):
       convolutional layers have 1x1 stride, and zero padding.
     """
     with tf.name_scope('input'):
-      x = self.images_placeholder
+      x = self.images
     
     net = slim.conv2d(x, 64, [3, 3], scope='conv3_1')
     #self.conv3_1 = net
@@ -109,19 +112,9 @@ class Style128Net(object):
 
   def ranking_loss(self, anchor, positive, negative):
     with tf.variable_scope('ranking_loss'):
-      #anchor.get_shape().assert_is_compatible_with(positive.get_shape())
-      #anchor.get_shape().assert_is_compatible_with(negative.get_shape())
-      #anchor = math_ops.to_float(anchor)
-      #positive = math_ops.to_float(positive)
-      #negative = math_ops.to_float(negative)
-
       pos_dist_exp = tf.exp(tf.sqrt(tf.reduce_sum(tf.square(tf.sub(anchor, positive)), 1)))  # Summing over distances in each batch
       neg_dist_exp = tf.exp(tf.sqrt(tf.reduce_sum(tf.square(tf.sub(anchor, negative)), 1)))
-
-
       d_positive = tf.truediv(pos_dist_exp, pos_dist_exp + neg_dist_exp, name='pos_softmax')
-      #d_negative = tf.truediv(neg_dist_exp, pos_dist_exp + neg_dist_exp, name='neg_softmax')
-      #loss = tf.scalar_mul(0.5, tf.add(tf.square(d_positive), tf.square(tf.sub(1.0, d_negative))))
       pre_loss = tf.square(d_positive)
       loss = tf.reduce_mean(pre_loss, 0)
     return loss

@@ -13,6 +13,7 @@ import pdb
 import os, pickle, csv
 import numpy as np
 from scipy import misc
+import threading
 
 import matplotlib
 matplotlib.use('Agg')
@@ -105,6 +106,8 @@ class DataSetClass():
             b1 = [self.sim_pairs_list[i] for i in self.pair_indices[j:n]]
             b2 = [self.sim_pairs_list[i] for i in self.pair_indices[0:n-j]]
             batch = b1 + b2
+            #reshuffle the indices since this is a new epoch.
+            random.shuffle(self.pair_indices)
         self.pair_index += batch_size
 
         anchors = []
@@ -127,6 +130,12 @@ class DataSetClass():
         images = np.vstack([ax, px, nx])
         indices = np.hstack([anchors, similars, dissimilars])
         return (images, indices)
+
+    def triplet_iterator(self, batch_size=10):
+        while True:
+            images, _ = self.get_triplet_batch(batch_size=batch_size)
+            yield images
+
 
     def tags(self, idx):
         colors = [self.colors[i] for i,x in enumerate(self.color_mat[idx]) if x>0]
@@ -185,6 +194,48 @@ class DataSetClass():
         plt.close(fig)
 
 
+class TripletRunner(object):
+    """
+    This class manages the the background threads needed to fill
+        a queue full of triplets.
+    """
+    def __init__(self, dataset, batch_size):
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.dataX = tf.placeholder(tf.float32, shape=(None, dataset.im_height, dataset.im_width, 3), name='input')
+        # The actual queue of data. The queue contains a vector for
+        self.queue = tf.FIFOQueue(
+                        capacity=2000,
+                        dtypes=[tf.float32],
+                        shapes=[[dataset.im_height, dataset.im_width, 3]]
+        )
+
+        self.enqueue_op = self.queue.enqueue_many(self.dataX)
+
+    def get_inputs(self):
+        """
+        Return's tensors containing a batch of triplets
+        """
+        return self.queue.dequeue_many(3*self.batch_size)
+
+    def thread_main(self, sess):
+        """
+        Function run on alternate thread. Basically, keep adding data to the queue.
+        """
+        for dataX in self.dataset.triplet_iterator(batch_size=self.batch_size):
+            sess.run(self.enqueue_op, feed_dict={self.dataX:dataX})
+
+    def start_threads(self, sess, n_threads=1):
+        """ Start background threads to feed queue """
+        threads = []
+        for n in range(n_threads):
+            t = threading.Thread(target=self.thread_main, args=(sess,))
+            t.daemon = True # thread will close when parent quits
+            t.start()
+            threads.append(t)
+        return threads
+
+
 
 
 
@@ -214,8 +265,31 @@ def example():
 
     #dataSet.show_triplet(im_1, idx_1, "./figures/trip1.png")
 
+def example2():
+    dataset_path = "/cvgl/u/anenberg/Fashion144k_stylenet_v1/"
+    similar_pairs_file  = "similar_pairs.pkl2"
+    dataSet = DataSetClass(dataset_path, similar_pairs_file)
+    with tf.device("/cpu:0"):
+        runner = TripletRunner(dataSet, 3)
+        batch = runner.get_inputs()
+
+
+    sess = tf.Session(config=tf.ConfigProto(intra_op_parallelism_threads=8))
+    init = tf.initialize_all_variables()
+    sess.run(init)
+
+    tf.train.start_queue_runners(sess=sess)
+    runner.start_threads(sess)
+
+    while True:
+        pdb.set_trace()
+        batch_ = sess.run([batch])
+        print(batch_[0].shape)
+
+
+
 if __name__ == '__main__':
-    example()
+    example2()
 
 
 

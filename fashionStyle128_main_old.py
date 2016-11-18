@@ -40,13 +40,13 @@ def train(args, hps):
   """Creating dataset"""
   dataSet = fashionStyle128_input.DataSetClass(args.data_dir, "similar_pairs.pkl2")
   runner = fashionStyle128_input.TripletRunner(dataSet, args.batch_size)
-  image_batch = runner.get_inputs()
 
 
   """Building the model."""
   # Placeholder for input images
   tf.set_random_seed(args.seed)
-  model = fashionStyle128_model.Style128Net(hps, image_batch, args.mode)
+  images_placeholder = tf.placeholder(tf.float32, shape=(None, IM_HEIGHT, IM_WIDTH, 3), name='input')
+  model = fashionStyle128_model.Style128Net(hps, images_placeholder, args.mode)
   model.build_graph()
 
 
@@ -65,7 +65,6 @@ def train(args, hps):
 
 
   tf.train.start_queue_runners(sess=sess) #not sure
-  runner.start_threads(sess)
 
   epoch = 0
   while not sv.should_stop() and epoch < args.max_nrof_epochs:
@@ -79,7 +78,11 @@ def train_one_epoch(args, sess, model, dataset, epoch, summary_writer):
   batch_number = 0
   while batch_number < args.epoch_size:
     start_time = time.time()
-    feed_dict = {model.learning_rate_placeholder: args.learning_rate}
+    batch, indices = dataset.get_triplet_batch(args.batch_size)
+    load_time = time.time() - start_time
+    print('Loaded %d image triplets in %.2f seconds' % (batch.shape[0] / 3, load_time))
+    start_time = time.time()
+    feed_dict = {model.images_placeholder: batch, model.learning_rate_placeholder: args.learning_rate}
     (_, summaries, loss, step) = sess.run(
       [model.train_op, model.summaries, model.loss,
       model.global_step],
