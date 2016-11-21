@@ -27,7 +27,7 @@ class DataSetClass():
     """
     self.similar_pairs : pairs of images whose rscore is above 0.75
     """
-    def __init__(self, dataset_path, similar_pairs_pkl, td=0.1, max_tries=50):
+    def __init__(self, dataset_path, similar_pairs_pkl, td=0.1, max_tries=300):
         self.dataset_path = dataset_path
         self.color_mat = np.load(os.path.join(dataset_path,'feat/feat_col.npy'))
         self.single_mat = np.load(os.path.join(dataset_path,'feat/feat_sin.npy'))
@@ -89,6 +89,8 @@ class DataSetClass():
             img = misc.imread(self.image_paths[j])
             if img.ndim == 2:
                 img = self.to_rgb(img)
+            elif img.ndim == 3 and img.shape[2]>3:
+                img = img[:,:,0:3]
             images[i,:,:,:] = img
         images_float = images.astype(np.float32)
         return images_float
@@ -102,13 +104,15 @@ class DataSetClass():
         n = len(self.pair_indices)
         if j + batch_size <= n:
             batch = [self.sim_pairs_list[i] for i in self.pair_indices[j:j+batch_size]]
+            self.pair_index += batch_size
         else:
             b1 = [self.sim_pairs_list[i] for i in self.pair_indices[j:n]]
             b2 = [self.sim_pairs_list[i] for i in self.pair_indices[0:n-j]]
             batch = b1 + b2
             #reshuffle the indices since this is a new epoch.
             random.shuffle(self.pair_indices)
-        self.pair_index += batch_size
+            self.pair_index = 0
+        
 
         anchors = []
         similars = []
