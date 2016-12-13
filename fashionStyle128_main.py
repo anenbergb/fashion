@@ -96,22 +96,27 @@ def train(args, hps):
     if epoch_pretrain < args.nrof_pretrain_epochs:
       if epoch_pretrain == 0:
         print("Beginning pretraining...")
-      step, step_cumulative = train_one_epoch(args, sess, model_pretrain, dataset, epoch_pretrain, summary_writer, inc_global_step_op, 'Pretrain ')
+      step, step_cumulative = train_one_epoch(args, sess, model_pretrain, dataset, epoch_pretrain, summary_writer, inc_global_step_op, epoch_size= args.epoch_size_pretrain, prefix='Pretrain ')
       
-      print("Validation:")
+      print("Validation (embedding):")
+      validate_embedding_step(args, sess, eval_model_pretrain, dataset, summary_writer, step, prefix='pretrain')
+      print("Validation (attribute classification):")
       validate_attribute_prediction_step(args, sess, eval_model_pretrain, dataset, summary_writer, step, prefix='pretrain')
-      epoch_pretrain = step // args.epoch_size
+      epoch_pretrain = step // args.epoch_size_pretrain
     else:
       if epoch_joint == 0:
         print("Beginning joint training...")
 
-      step, step_cumulative = train_one_epoch(args, sess, model, dataset, epoch_joint, summary_writer, inc_global_step_op, prefix='Joint ')
+      step, step_cumulative = train_one_epoch(args, sess, model, dataset, epoch_joint, summary_writer, inc_global_step_op, epoch_size = args.epoch_size, prefix='Joint ')
 
-      print("Validation:")
+      print("Validation (embedding):")
       validate_embedding_step(args, sess, eval_model, dataset, summary_writer, step, prefix='joint')
+      print("Validation (attribute classification):")
       validate_attribute_prediction_step(args, sess, eval_model, dataset, summary_writer, step, prefix='joint')
       epoch_joint = step // args.epoch_size
 
+    print('Model directory: %s' % model_dir)
+    print('Log directory: %s' % log_dir)
     step_pretrain = sess.run(model_pretrain.global_step, feed_dict=None)
     step_joint = sess.run(model.global_step, feed_dict=None)
     step_cumulative = sess.run(global_step)
@@ -121,9 +126,9 @@ def train(args, hps):
 
 
 
-def train_one_epoch(args, sess, model, dataset, epoch, summary_writer, inc_global_step, prefix=''):
+def train_one_epoch(args, sess, model, dataset, epoch, summary_writer, inc_global_step, epoch_size = 10, prefix=''):
   batch_number = 0
-  while batch_number < args.epoch_size:
+  while batch_number < epoch_size:
     start_time = time.time()
     feed_dict = {model.learning_rate_placeholder: args.learning_rate}
     (_, summaries, loss, step, step_cumulative) = sess.run(
@@ -136,7 +141,7 @@ def train_one_epoch(args, sess, model, dataset, epoch, summary_writer, inc_globa
       tf.logging.info('loss: %.3f\n' % (loss))
       summary_writer.flush()
     print(prefix+'Epoch: [%d][%d/%d]\tTime %.3f\tLoss %2.3f' %
-          (epoch, batch_number+1, args.epoch_size, duration, loss))
+          (epoch, batch_number+1, epoch_size, duration, loss))
     batch_number += 1
   return step, step_cumulative
 
@@ -156,17 +161,17 @@ def validate_embedding_step(args, sess, model, dataset, summary_writer, step, pr
   test_dist = fashionStyle128.compute_embedding_dist(test_embedding1, test_embedding2)
 
   """ Calculate evaluation metrics """
-  thresholds = np.arange(0, 4, 0.01)
-  train_roc, test_roc = fashionStyle128.calculate_roc(
+  thresholds = np.arange(0, 10, 0.01)
+  train_roc, test_roc, threshold_roc = fashionStyle128.calculate_roc(
     thresholds,
     train_dist,
     test_dist,
     np.asarray(train_actual_issimilar),
     np.asarray(test_actual_issimilar))
 
-  thresholds = np.arange(0, 4, 0.001)
+  thresholds = np.arange(0, 10, 0.001)
   far_target = args.far_target
-  train_val_far, test_val_far = fashionStyle128.calculate_val(
+  train_val_far, test_val_far, threshold_val = fashionStyle128.calculate_val(
     thresholds,
     train_dist,
     test_dist,
@@ -182,22 +187,22 @@ def validate_embedding_step(args, sess, model, dataset, summary_writer, step, pr
 
 
 
-  print('[Train] Accuracy: %1.3f, TPR: %1.3f, FPR: %1.3f' % (acc_train, tpr_train, fpr_train))
-  print('[Test] Accuracy: %1.3f, TPR: %1.3f, FPR: %1.3f' % (acc_test, tpr_test, fpr_test))
-  print('[Train] Validation rate: %2.5f @ FAR=%2.5f' % (val_train, far_train))
-  print('[Test] Validation rate: %2.5f @ FAR=%2.5f' % (val_test, far_test))
+  print('[Train] Accuracy: %1.3f, TPR: %1.3f, FPR: %1.3f @ threshold %1.3f' % (acc_train, tpr_train, fpr_train, threshold_roc))
+  print('[Test] Accuracy: %1.3f, TPR: %1.3f, FPR: %1.3f @ threshold %1.3f' % (acc_test, tpr_test, fpr_test, threshold_roc))
+  print('[Train] Validation rate: %2.5f @ FAR=%2.5f @ threshold %1.3f' % (val_train, far_train, threshold_val))
+  print('[Test] Validation rate: %2.5f @ FAR=%2.5f @ threshold %1.3f' % (val_test, far_test, threshold_val))
   # Add validation loss and accuracy to summary
   summary = tf.Summary()
-  summary.value.add(tag=prefix +'_validation/train/accuracy', simple_value=acc_train)
-  summary.value.add(tag=prefix +'_validation/train/tp_rate', simple_value=tpr_train)
-  summary.value.add(tag=prefix +'_validation/train/fp_rate', simple_value=fpr_train)
-  summary.value.add(tag=prefix +'_validation/train/val_rate', simple_value=val_train)
-  summary.value.add(tag=prefix +'_validation/train/far_rate', simple_value=far_train)
-  summary.value.add(tag=prefix + '_validation/test/accuracy', simple_value=acc_test)
-  summary.value.add(tag=prefix + '_validation/test/tp_rate', simple_value=tpr_test)
-  summary.value.add(tag=prefix + '_validation/test/fp_rate', simple_value=fpr_test)
-  summary.value.add(tag=prefix + '_validation/test/val_rate', simple_value=val_test)
-  summary.value.add(tag=prefix + '_validation/test/far_rate', simple_value=far_test)
+  summary.value.add(tag=prefix +'_validation/embedding/train/accuracy', simple_value=acc_train)
+  summary.value.add(tag=prefix +'_validation/embedding/train/true_positive_rate', simple_value=tpr_train)
+  summary.value.add(tag=prefix +'_validation/embedding/train/false_positive_rate', simple_value=fpr_train)
+  summary.value.add(tag=prefix +'_validation/embedding/train/VAL_validation_rate', simple_value=val_train)
+  summary.value.add(tag=prefix +'_validation/embedding/train/FAR_false_accept_rate', simple_value=far_train)
+  summary.value.add(tag=prefix +'_validation/embedding/test/accuracy', simple_value=acc_test)
+  summary.value.add(tag=prefix +'_validation/embedding/test/true_positive_rate', simple_value=tpr_test)
+  summary.value.add(tag=prefix +'_validation/embedding/test/false_positive_rate', simple_value=fpr_test)
+  summary.value.add(tag=prefix +'_validation/embedding/test/VAL_validation_rate', simple_value=val_test)
+  summary.value.add(tag=prefix +'_validation/embedding/test/FAR_false_accept_rate', simple_value=far_test)
   summary_writer.add_summary(summary, step)
   
 
@@ -216,7 +221,6 @@ def validate_attribute_prediction_step(args, sess, model, dataset, summary_write
 
   train_predictions = fashionStyle128.compute_scaled_predictions(train_predictions_raw)
   test_predictions = fashionStyle128.compute_scaled_predictions(test_predictions_raw)
-
   train_predictions01 = np.greater(train_predictions, threshold).astype(np.int)
   test_predictions01 = np.greater(test_predictions, threshold).astype(np.int)
   train_labels = train_labels.astype(np.int)
@@ -239,36 +243,36 @@ def validate_attribute_prediction_step(args, sess, model, dataset, summary_write
   print('[Test]\t\t%1.3f\t%1.3f\t%1.3f\t%1.3f\t%1.3f\t%1.3f\t%1.3f\t%1.3f\t%1.3f\t%1.3f'%tuple(test_top_k_recall.tolist()[:k]))
 
   summary = tf.Summary()
-  summary.value.add(tag=prefix + '_validation/train/hamming_score', simple_value=train_hamming_score)
-  summary.value.add(tag=prefix + '_validation/train/precision', simple_value=train_precision)
-  summary.value.add(tag=prefix + '_validation/train/recall', simple_value=train_recall)
-  summary.value.add(tag=prefix + '_validation/train/F1', simple_value=train_f1)
-  summary.value.add(tag=prefix + '_validation/test/hamming_score', simple_value=test_hamming_score)
-  summary.value.add(tag=prefix + '_validation/test/precision', simple_value=test_precision)
-  summary.value.add(tag=prefix + '_validation/test/recall', simple_value=test_recall)
-  summary.value.add(tag=prefix + '_validation/test/F1', simple_value=test_f1)
+  summary.value.add(tag=prefix + '_validation/attribute/train/hamming_score', simple_value=train_hamming_score)
+  summary.value.add(tag=prefix + '_validation/attribute/train/precision', simple_value=train_precision)
+  summary.value.add(tag=prefix + '_validation/attribute/train/recall', simple_value=train_recall)
+  summary.value.add(tag=prefix + '_validation/attribute/train/F1', simple_value=train_f1)
+  summary.value.add(tag=prefix + '_validation/attribute/test/hamming_score', simple_value=test_hamming_score)
+  summary.value.add(tag=prefix + '_validation/attribute/test/precision', simple_value=test_precision)
+  summary.value.add(tag=prefix + '_validation/attribute/test/recall', simple_value=test_recall)
+  summary.value.add(tag=prefix + '_validation/attribute/test/F1', simple_value=test_f1)
 
-  summary.value.add(tag=prefix + '_validation/train/top_recall/1', simple_value=train_top_k_recall[0])
-  summary.value.add(tag=prefix + '_validation/train/top_recall/2', simple_value=train_top_k_recall[1])
-  summary.value.add(tag=prefix + '_validation/train/top_recall/3', simple_value=train_top_k_recall[2])
-  summary.value.add(tag=prefix + '_validation/train/top_recall/4', simple_value=train_top_k_recall[3])
-  summary.value.add(tag=prefix + '_validation/train/top_recall/5', simple_value=train_top_k_recall[4])
-  summary.value.add(tag=prefix + '_validation/train/top_recall/6', simple_value=train_top_k_recall[5])
-  summary.value.add(tag=prefix + '_validation/train/top_recall/7', simple_value=train_top_k_recall[6])
-  summary.value.add(tag=prefix + '_validation/train/top_recall/8', simple_value=train_top_k_recall[7])
-  summary.value.add(tag=prefix + '_validation/train/top_recall/9', simple_value=train_top_k_recall[8])
-  summary.value.add(tag=prefix + '_validation/train/top_recall/10', simple_value=train_top_k_recall[9])
+  summary.value.add(tag=prefix + '_validation/attribute/train/top_recall/1', simple_value=train_top_k_recall[0])
+  summary.value.add(tag=prefix + '_validation/attribute/train/top_recall/2', simple_value=train_top_k_recall[1])
+  summary.value.add(tag=prefix + '_validation/attribute/train/top_recall/3', simple_value=train_top_k_recall[2])
+  summary.value.add(tag=prefix + '_validation/attribute/train/top_recall/4', simple_value=train_top_k_recall[3])
+  summary.value.add(tag=prefix + '_validation/attribute/train/top_recall/5', simple_value=train_top_k_recall[4])
+  summary.value.add(tag=prefix + '_validation/attribute/train/top_recall/6', simple_value=train_top_k_recall[5])
+  summary.value.add(tag=prefix + '_validation/attribute/train/top_recall/7', simple_value=train_top_k_recall[6])
+  summary.value.add(tag=prefix + '_validation/attribute/train/top_recall/8', simple_value=train_top_k_recall[7])
+  summary.value.add(tag=prefix + '_validation/attribute/train/top_recall/9', simple_value=train_top_k_recall[8])
+  summary.value.add(tag=prefix + '_validation/attribute/train/top_recall/10', simple_value=train_top_k_recall[9])
 
-  summary.value.add(tag=prefix + '_validation/test/top_recall/1', simple_value=test_top_k_recall[0])
-  summary.value.add(tag=prefix + '_validation/test/top_recall/2', simple_value=test_top_k_recall[1])
-  summary.value.add(tag=prefix + '_validation/test/top_recall/3', simple_value=test_top_k_recall[2])
-  summary.value.add(tag=prefix + '_validation/test/top_recall/4', simple_value=test_top_k_recall[3])
-  summary.value.add(tag=prefix + '_validation/test/top_recall/5', simple_value=test_top_k_recall[4])
-  summary.value.add(tag=prefix + '_validation/test/top_recall/6', simple_value=test_top_k_recall[5])
-  summary.value.add(tag=prefix + '_validation/test/top_recall/7', simple_value=test_top_k_recall[6])
-  summary.value.add(tag=prefix + '_validation/test/top_recall/8', simple_value=test_top_k_recall[7])
-  summary.value.add(tag=prefix + '_validation/test/top_recall/9', simple_value=test_top_k_recall[8])
-  summary.value.add(tag=prefix + '_validation/test/top_recall/10', simple_value=test_top_k_recall[9])
+  summary.value.add(tag=prefix + '_validation/attribute/test/top_recall/1', simple_value=test_top_k_recall[0])
+  summary.value.add(tag=prefix + '_validation/attribute/test/top_recall/2', simple_value=test_top_k_recall[1])
+  summary.value.add(tag=prefix + '_validation/attribute/test/top_recall/3', simple_value=test_top_k_recall[2])
+  summary.value.add(tag=prefix + '_validation/attribute/test/top_recall/4', simple_value=test_top_k_recall[3])
+  summary.value.add(tag=prefix + '_validation/attribute/test/top_recall/5', simple_value=test_top_k_recall[4])
+  summary.value.add(tag=prefix + '_validation/attribute/test/top_recall/6', simple_value=test_top_k_recall[5])
+  summary.value.add(tag=prefix + '_validation/attribute/test/top_recall/7', simple_value=test_top_k_recall[6])
+  summary.value.add(tag=prefix + '_validation/attribute/test/top_recall/8', simple_value=test_top_k_recall[7])
+  summary.value.add(tag=prefix + '_validation/attribute/test/top_recall/9', simple_value=test_top_k_recall[8])
+  summary.value.add(tag=prefix + '_validation/attribute/test/top_recall/10', simple_value=test_top_k_recall[9])
 
   summary_writer.add_summary(summary, step)
 
@@ -292,6 +296,13 @@ def main(args):
   else:
     raise ValueError('Only supports gpus 0, 1, 2, or 3')
 
+  if args.loss == 'RANKING':
+    joint_loss_weight = args.joint_loss_weight_rank
+  else:
+    assert(args.loss == 'TRIPLET')
+    joint_loss_weight = args.joint_loss_weight_triplet
+
+
   hps = fashionStyle128_model.HParams(batch_size=args.batch_size,
                              epoch_size=args.epoch_size,
                              loss=args.loss,
@@ -300,7 +311,9 @@ def main(args):
                              learning_rate=args.learning_rate,
                              learning_rate_decay_epochs=args.learning_rate_decay_epochs,
                              learning_rate_decay_factor=args.learning_rate_decay_factor,
-                             moving_average_decay=args.moving_average_decay)
+                             moving_average_decay=args.moving_average_decay,
+                             joint_loss_weight=joint_loss_weight
+                             )
 
   with tf.device(dev):
     if args.mode == 'train':
@@ -339,11 +352,22 @@ def parse_arguments(argv):
       help='Positive to negative triplet distance margin.', default=0.2)
 
 
+  parser.add_argument('--joint_loss_weight_rank', type=float,
+      help='Parameter to weight the classification loss relative to the embedding loss.' +
+      'total loss = alpha * (classification loss) + (1- alpha) * (ranking embedding loss)',
+      default=0.1)
+  parser.add_argument('--joint_loss_weight_triplet', type=float,
+      help='Parameter to weight the classification loss relative to the embedding loss.' +
+      'total loss = alpha * (classification loss) + (1- alpha) * (triplet embedding loss)',
+      default=0.1)
 
   parser.add_argument('--max_nrof_epochs', type=int,
         help='Number of epochs to run.', default=500)
   parser.add_argument('--epoch_size', type=int,
       help='Number of batches per epoch.', default=1000)
+  parser.add_argument('--epoch_size_pretrain', type=int,
+      help='Number of batches per epoch.', default=1000)
+
   parser.add_argument('--batch_size', type=int,
       help='Number of images to process in a batch.', default=10)
   parser.add_argument('--optimizer', type=str, choices=['ADAGRAD', 'ADADELTA', 'ADAM', 'RMSPROP', 'MOM', 'SGD'],
@@ -357,6 +381,8 @@ def parse_arguments(argv):
       help='Learning rate decay factor.', default=1.0)
   parser.add_argument('--moving_average_decay', type=float,
       help='Exponential decay for tracking of training parameters.', default=0.9999)
+
+
   parser.add_argument('--seed', type=int,
       help='Random seed.', default=666)
   parser.add_argument('--gpu', type=int,

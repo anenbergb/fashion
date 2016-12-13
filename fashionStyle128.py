@@ -60,7 +60,7 @@ def calculate_roc(thresholds, train_dist, test_dist, train_actual_issim, test_ac
     train_roc = (tpr_train[best_threshold_index], fpr_train[best_threshold_index], acc_train[best_threshold_index])
     test_roc = calculate_accuracy(thresholds[best_threshold_index], test_dist, test_actual_issim)
     #pdb.set_trace()
-    return train_roc, test_roc
+    return train_roc, test_roc, thresholds[best_threshold_index]
 
 def calculate_accuracy(threshold, dist, actual_issame):
     predict_issame = np.less(dist, threshold)
@@ -91,7 +91,7 @@ def calculate_val(thresholds, train_dist, test_dist, train_actual_issim, test_ac
     train_val_far = calculate_val_far(threshold, train_dist, train_actual_issim)
     test_val_far = calculate_val_far(threshold, test_dist, test_actual_issim)
     #pdb.set_trace()
-    return train_val_far, test_val_far  
+    return train_val_far, test_val_far, threshold
 
 
 def calculate_val_far(threshold, dist, actual_issame):

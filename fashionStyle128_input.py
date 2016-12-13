@@ -458,6 +458,82 @@ class ImageRunner(object):
         return threads
 
 
+
+def _resize(image, height, width):
+  """Resize images to the aspect ratio.
+
+  Args:
+    image: A 3-D image `Tensor`.
+    smallest_side: A python integer or scalar `Tensor` indicating the size of
+      the smallest side after resize.
+
+  Returns:
+    resized_image: A 3-D tensor containing the resized image.
+  """
+  new_height = tf.convert_to_tensor(height, dtype=tf.int32)
+  new_width = tf.convert_to_tensor(width, dtype=tf.int32)
+
+  shape = tf.shape(image)
+  height = shape[0]
+  width = shape[1]
+  image = tf.expand_dims(image, 0)
+  resized_image = tf.image.resize_bilinear(image, [new_height, new_width],
+                                           align_corners=False)
+  resized_image = tf.squeeze(resized_image)
+  resized_image.set_shape([None, None, 3])
+  return resized_image
+
+def _mean_image_subtraction(image, means, stds):
+  """Subtracts the given means from each image channel.
+
+  For example:
+    means = [123.68, 116.779, 103.939]
+    image = _mean_image_subtraction(image, means)
+
+  Note that the rank of `image` must be known.
+
+  Args:
+    image: a tensor of size [height, width, C].
+    means: a C-vector of values to subtract from each channel.
+
+  Returns:
+    the centered image.
+
+  Raises:
+    ValueError: If the rank of `image` is unknown, if `image` has a rank other
+      than three or if the number of channels in `image` doesn't match the
+      number of values in `means`.
+
+       images_float = (images_float - self.channel_mean) / self.channel_std
+  """
+  if image.get_shape().ndims != 3:
+    raise ValueError('Input must be of size [height, width, C>0]')
+  num_channels = image.get_shape().as_list()[-1]
+  if len(means) != num_channels:
+    raise ValueError('len(means) must match the number of channels')
+  if len(stds) != num_channels:
+    raise ValueError('len(stds) must match the number of channels')
+
+  channels = tf.split(2, num_channels, image)
+  for i in range(num_channels):
+    channels[i] -= means[i]
+    channels[i] /= stds[i]
+  return tf.concat(2, channels)
+
+def preprocess_tensor(image, height, width, channel_mean, channel_std):
+    im = _resize(image, height, width)
+    im.set_shape([height, width, 3])
+    im = tf.to_float(im)
+    im = _mean_image_subtraction(im, channel_mean, channel_std)
+    return im
+
+
+
+
+
+
+
+
 if __name__ == '__main__':
     print("nothing to evaluate")
 

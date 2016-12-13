@@ -17,7 +17,8 @@ import pdb
 HParams = namedtuple('HParams',
                      'batch_size, epoch_size, loss, alpha, '
                      'optimizer, learning_rate, learning_rate_decay_epochs, '
-                     'learning_rate_decay_factor, moving_average_decay')
+                     'learning_rate_decay_factor, moving_average_decay, '
+                     'joint_loss_weight')
 
 
 class Style128Net(object):
@@ -64,7 +65,7 @@ class Style128Net(object):
       self._build_train_op()
 
       #record images
-      util.add_to_collections(self.summary_collection, tf.image_summary(self.mode+'/'+'fashion', self.images, max_images=100))
+      util.add_to_collections(self.summary_collection, tf.image_summary(self.mode, self.images, max_images=10))
       # Build the summary operation based on the TF collection of Summaries.
       self.summaries = tf.merge_all_summaries(key=self.summary_collection)
 
@@ -75,30 +76,32 @@ class Style128Net(object):
       #assumes that the network has been pre-trained in classification mode
       self._build_embedding_network(reuse=True) 
       embedding_loss = self._build_embedding_loss()
+      embedding_loss_s = tf.scalar_mul(1.0-self.hps.joint_loss_weight, embedding_loss)
 
       self._build_classification_net_input(mode='triplet')
       #reset the classification network.
       self.classification_network_scope = classification_network_scopes[self.mode]
       self._build_classification_network(scope=self.classification_network_scope, reuse=None)
       class_loss = self._build_classification_loss()
+      class_loss_s = tf.scalar_mul(self.hps.joint_loss_weight, class_loss)
       
-      #total loss is the sum of the losses.
-      self.loss = tf.add(embedding_loss, class_loss, name='total_loss')
+      #total loss is the sum of the weighted losses.
+      self.loss = tf.add(embedding_loss_s, class_loss_s, name='total_loss')
 
       self.loss_collection = 'joint_losses'
       tf.add_to_collection(self.loss_collection, class_loss)
-      #tf.scalar_summary('cl_loss', class_loss)
       tf.add_to_collection(self.loss_collection, embedding_loss)
-      #tf.scalar_summary('embedding_loss', embedding_loss)
       tf.add_to_collection(self.loss_collection, self.loss)
-      #tf.scalar_summary('total_loss', self.loss)
 
       self._set_learning_rate()
       self._build_train_op()
 
 
       #record images
-      util.add_to_collections(self.summary_collection, tf.image_summary(self.mode+'/'+'fashion', self.images, max_images=100))
+      anchor, positive, negative = tf.split(0, 3, self.images)
+      ims_concat = tf.concat(2, [negative, anchor, positive])
+
+      util.add_to_collections(self.summary_collection, tf.image_summary(self.mode, ims_concat, max_images=10))
       # Build the summary operation based on the TF collection of Summaries.
       self.summaries = tf.merge_all_summaries(key=self.summary_collection)
 
@@ -109,12 +112,19 @@ class Style128Net(object):
       self.classification_network_scope = classification_network_scopes['pretrain']
       self._build_classification_network_pretrain(scope=self.classification_network_scope, reuse=True)
 
-    else:
-      assert(self.mode == 'joint_forward')
+    elif self.mode == 'joint_forward':
       self._build_embedding_network(reuse=True) 
       self._build_classification_net_input(mode='single')
       self.classification_network_scope = classification_network_scopes['joint']
       self._build_classification_network(scope=self.classification_network_scope, reuse=True)
+
+    else:
+      # When reloading the model from checkpoint and only performing forward propagation.
+      assert(self.mode == 'forward_reload')
+      self._build_embedding_network(reuse=None) 
+      self._build_classification_net_input(mode='single')
+      self.classification_network_scope = classification_network_scopes['joint']
+      self._build_classification_network(scope=self.classification_network_scope, reuse=None)
     
 
 
