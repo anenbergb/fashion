@@ -18,6 +18,7 @@ import matplotlib
 matplotlib.use('Agg')
 from matplotlib import pyplot as plt
 import textwrap as tw
+import time
 
 
 
@@ -165,7 +166,7 @@ class DataSetClass():
             images_float = (images_float - self.channel_mean) / self.channel_std
         return images_float
 
-    def get_triplet_batch(self, batch_size=10):
+    def get_triplet_batch(self, batch_size=10, all_labels=False):
         """
         Returns a batch of images of shape (3 * batch_size, height, width, 3)
         Batch is partitioned into [anchor, similar images, dissimilar images]
@@ -177,12 +178,15 @@ class DataSetClass():
             self.train_pair_index += batch_size
         else:
             b1 = [self.sim_train_pairs_list[i] for i in self.train_pair_indices[j:n]]
-            b2 = [self.sim_train_pairs_list[i] for i in self.train_pair_indices[0:n-j]]
+            b2 = [self.sim_train_pairs_list[i] for i in self.train_pair_indices[0:batch_size - (n-j)]]
             batch = b1 + b2
+
+        if self.train_pair_index >= n:
             #reshuffle the indices since this is a new epoch.
             random.shuffle(self.train_pair_indices)
             self.train_pair_index = 0
         
+        assert(len(batch) == batch_size)
 
         anchors = []
         similars = []
@@ -203,7 +207,10 @@ class DataSetClass():
 
         images = np.vstack([ax, px, nx])
         indices = np.hstack([anchors, similars, dissimilars])
-        labels = self.single_mat[indices].astype(np.float32)
+        if all_labels:
+            labels = self.labels[indices].astype(np.float32) # [colors, singles]
+        else:
+            labels = self.single_mat[indices].astype(np.float32)
 
         return (images, labels)
 
@@ -219,8 +226,10 @@ class DataSetClass():
             self.train_index += batch_size
         else:
             b1 = [self.trainids[i] for i in self.train_indices[j:n]]
-            b2 = [self.trainids[i] for i in self.train_indices[0:n-j]]
+            b2 = [self.trainids[i] for i in self.train_indices[0:batch_size - (n-j)]]
             batch = b1 + b2
+
+        if self.train_index >= n:
             #reshuffle the indices since this is a new epoch.
             random.shuffle(self.train_indices)
             self.train_index = 0
@@ -230,9 +239,9 @@ class DataSetClass():
         return images, labels
 
 
-    def triplet_iterator(self, batch_size=10):
+    def triplet_iterator(self, batch_size=10, all_labels=False):
         while True:
-            images, labels = self.get_triplet_batch(batch_size=batch_size)
+            images, labels = self.get_triplet_batch(batch_size=batch_size, all_labels=all_labels)
             yield images, labels
 
     def image_iterator(self, batch_size=10, split='train'):
@@ -377,19 +386,25 @@ class TripletRunner(object):
     This class manages the the background threads needed to fill
         a queue full of triplets.
     """
-    def __init__(self, dataset, batch_size, prefix='triplet_'):
+    def __init__(self, dataset, batch_size, prefix='triplet_', all_labels=False):
         self.dataset = dataset
         self.batch_size = batch_size
         self.dataX = tf.placeholder(dtype=tf.float32, shape=(None, dataset.im_height, dataset.im_width, 3), name=prefix+'input')
-        self.dataY = tf.placeholder(dtype=tf.float32, shape=[None, dataset.kclasses], name=prefix+'labels')
+        
+        if all_labels:
+            klabels = dataset.labels.shape[1]
+        else:
+            klabels = dataset.kclasses
+        self.dataY = tf.placeholder(dtype=tf.float32, shape=[None, klabels], name=prefix+'labels')
         # The actual queue of data. The queue contains a vector for
         self.queue = tf.FIFOQueue(
                         capacity=2000,
                         dtypes=[tf.float32, tf.float32],
-                        shapes=[[dataset.im_height, dataset.im_width, 3], [dataset.kclasses]]
+                        shapes=[[dataset.im_height, dataset.im_width, 3], [klabels]]
         )
 
         self.enqueue_op = self.queue.enqueue_many([self.dataX, self.dataY])
+        self.all_labels = all_labels
 
     def get_inputs(self):
         """
@@ -401,7 +416,7 @@ class TripletRunner(object):
         """
         Function run on alternate thread. Basically, keep adding data to the queue.
         """
-        for dataX, dataY in self.dataset.triplet_iterator(batch_size=self.batch_size):
+        for dataX, dataY in self.dataset.triplet_iterator(batch_size=self.batch_size, all_labels=self.all_labels):
             sess.run(self.enqueue_op, feed_dict={self.dataX:dataX, self.dataY:dataY})
 
     def start_threads(self, sess, n_threads=1):
@@ -532,29 +547,171 @@ def preprocess_tensor(image, height, width, channel_mean, channel_std):
 
 
 
+def show_triplet(images, labels, dataset, save_path):
+    """
+    images is a numpy array of shape (3, im_height, im_width, 3)
+    labels is a numpy array of shape (3, 123)
+
+    the first dimension is [anchor, similar, dissimilar]
+    """
+    def r_metric(label1, label2):
+        """
+        label1 & label 2 are np.arrays of shape (123,)
+        """
+        return 1.0*sum(label1 & label2) / sum(label1 | label2)
+
+    def label_names(dataset, label):
+        colors = [dataset.colors[i] for i,x in enumerate(label[:dataset.color_mat.shape[1]]) if x>0]
+        singles = [dataset.singles[i] for i,x in enumerate(label[dataset.color_mat.shape[1]:]) if x>0]
+        return colors + singles
+
+    def tags(self, idx):
+        singles = [self.singles[i] for i,x in enumerate(self.single_mat[idx]) if x>0]
+
+
+    images = (images * dataset.channel_std) + dataset.channel_mean
+    images = images.astype('uint8')
+    anchor_im = images[0]
+    pos_im = images[1]
+    neg_im = images[2]
+    
+
+    anchor_label = labels[0]
+    pos_label = labels[1]
+    neg_label = labels[2]
+
+    fig = plt.figure()
+    plt.subplot(131)
+    plt.imshow(neg_im)
+    plt.title('Dissimilar r={0:.2f}'.format(r_metric(anchor_label, neg_label)), fontsize=16)
+    #plt.xlabel("colors: Heather-Gray-Boots, White-Shirt, White-Sunglasses.\nsingles: Boots, Heather Gray, Shirt, Sunglasses, White")
+    frame1 = plt.gca()
+    frame1.axes.get_xaxis().set_visible(False)
+    frame1.axes.get_yaxis().set_visible(False)
+    #plt.figtext(.02, .02, 
+
+
+
+    plt.subplot(132)
+    plt.imshow(anchor_im)
+    plt.title('Anchor', fontsize=16)
+    frame1 = plt.gca()
+    frame1.axes.get_xaxis().set_visible(False)
+    frame1.axes.get_yaxis().set_visible(False)
+    plt.subplot(133)
+    plt.imshow(pos_im)
+    plt.title('Similar r={0:.2f}'.format(r_metric(anchor_label, pos_label)),fontsize=16)
+    frame1 = plt.gca()
+    frame1.axes.get_xaxis().set_visible(False)
+    frame1.axes.get_yaxis().set_visible(False)
+
+    comment = "Anchor : {0}\n".format(', '.join(label_names(dataset, anchor_label)))
+    comment += "Similar : {0}\n".format(', '.join(label_names(dataset, pos_label)))
+    comment += "Dissimilar : {0}\n".format(', '.join(label_names(dataset, neg_label)))
+
+    comment = tw.fill(tw.dedent(comment.rstrip() ), width=80)
+    plt.figtext(0, 0.1, comment, horizontalalignment='left',
+        fontsize=12, multialignment='left')
+
+    plt.savefig(save_path)
+    plt.close(fig)
+
+
+
+def tripletRunnerTest():
+    pdb.set_trace()
+    def select_triplet(batch, idx):
+        """
+        Suppose the batch is a matrix whose first dimension of
+        shape 3*batch_size, where it is partitioned into segments
+        [anchor, similar, dissimilar] segments.
+        """
+        assert(batch.shape[0] % 3 == 0)
+        batch_size = batch.shape[0] / 3
+        return batch[np.array([idx, idx+batch_size, idx+2*batch_size])]
+
+    def compute_r_metric(batch):
+        """
+        Suppose the batch is a matrix whose first dimension of
+        shape 3*batch_size, where it is partitioned into segments
+        [anchor, similar, dissimilar] segments.
+        """
+        assert(batch.shape[0] % 3 == 0)
+        batch_size = batch.shape[0] / 3
+        anchor = batch[:batch_size]
+        similar = batch[batch_size:2*batch_size]
+        dissimilar = batch[2*batch_size:3*batch_size]
+        r_metrics = []
+        for i in range(batch_size):
+            sim_r_metric = 1.0*sum(anchor[i] & similar[i]) / sum(anchor[i] | similar[i])
+            dis_r_metric = 1.0*sum(anchor[i] & dissimilar[i]) / sum(anchor[i] | dissimilar[i])
+            r_metrics.append((sim_r_metric, dis_r_metric))
+        return r_metrics
+
+    with tf.device("/cpu:0"):
+        tf.set_random_seed(669)
+        print("Starting triplet Runner Test")
+        data_dir = '/cvgl/u/anenberg/Fashion144k_stylenet_v1/'
+        dataset = DataSetClass(data_dir, "similar_pairs.pkl2")
+        print("dataset.train_pair_index %d" % dataset.train_pair_index)
+        batch_size = 1
+        dataset.train_pair_index = 61900
+        runner = TripletRunner(dataset, batch_size, prefix='', all_labels=True)
+        image_batch, label_batch = runner.get_inputs()
+        print("dataset.train_pair_index %d" % dataset.train_pair_index)
+
+
+
+
+        config=tf.ConfigProto( log_device_placement=True,
+                allow_soft_placement=True,
+                inter_op_parallelism_threads=4,
+                intra_op_parallelism_threads=8)
+        init_op = tf.global_variables_initializer()
+        sess = tf.Session(config=config)
+        sess.run(init_op)
+        coord = tf.train.Coordinator()
+        batches = 0
+        save_root = '/afs/cs.stanford.edu/u/anenberg/scr/CS331B/fashion/debug/runner_12_14'
+        threads = tf.train.start_queue_runners(sess=sess, coord=coord)
+        runner.start_threads(sess)
+        print("dataset.train_pair_index %d" % dataset.train_pair_index)
+
+        def save_image(images, labels, i):
+            images = select_triplet(images, i)
+            labels = select_triplet(labels, i)
+            save_suffix = "triplet_{0}".format(batches*batch_size+i)
+            save_path = os.path.join(save_root, save_suffix)
+            show_triplet(images, labels, dataset, save_path)
+            print("[Saving @ {0}".format(save_suffix))
+
+
+        while True:
+            start_time = time.time()
+            image_batch_np, label_batch_np = sess.run([image_batch, label_batch])
+            assert(image_batch_np.shape[0] == 3*batch_size and image_batch_np.shape[0] == 3*batch_size)
+            label_batch_np = label_batch_np.astype(np.int)
+            r_metrics = compute_r_metric(label_batch_np)
+            duration = time.time() - start_time
+            #if batches % 10 == 0:
+            #    print("[%d][%d/%d]\tR_SIM %.3f\tR_DIS %.3f\tTime %.3f"%(batches, 0, batch_size, r_metrics[0][0], r_metrics[0][1], duration))
+            for i, (rsim, rdis) in enumerate(r_metrics):
+                if (batch_size*batches + i) % 10 == 0:
+                    print("[%d][%d/%d][%d/%d]\tdataset[%d/%d]\tR_SIM %.3f\tR_DIS %.3f\tTime %.3f"%(batches, i, batch_size, batch_size*batches + i, len(dataset.train_pair_indices), dataset.train_pair_index, len(dataset.train_pair_indices), rsim, rdis, duration))
+                if rsim < 0.75 or rdis > 0.1:
+                    print("[%d][%d/%d]\tR_SIM %.3f\tR_DIS %.3f\tTime %.3f\t[WARNING] detected invalid triplet" % (batches, i, batch_size, rsim, rdis, duration))
+                    save_image(image_batch_np, label_batch_np, i)
+
+            if batches % 10000 == 0:
+                save_image(image_batch_np, label_batch_np,random.randint(0,batch_size-1))
+            batches += 1
+
+        coord.request_stop()
+        coord.join(threads)
+        sess.close()
+
 
 
 if __name__ == '__main__':
-    print("nothing to evaluate")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    print("hello world")
+    tripletRunnerTest()

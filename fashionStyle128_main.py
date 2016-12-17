@@ -27,16 +27,26 @@ val_test_nrof_dissimilar = 100
 
 
 def train(args, hps):
-  """Creating output directories"""
-  subdir = datetime.strftime(datetime.now(), '%Y%m%d-%H%M%S')
-  #save event logs (Tensorboard) to log_dir
-  log_dir = os.path.join(os.path.expanduser(args.logs_base_dir), subdir)
-  if not os.path.isdir(log_dir):  # Create the log directory if it doesn't exist
-      os.makedirs(log_dir)
-  #save checkpoints in model_dir
-  model_dir = os.path.join(os.path.expanduser(args.models_base_dir), subdir)
-  if not os.path.isdir(model_dir):  # Create the model directory if it doesn't exist
-      os.makedirs(model_dir)
+
+
+  if len(args.checkpoint) > 0:
+    print("Restoring model from checkpoint at %s.\nSkipping pretraining"%(args.checkpoint))
+    log_dir = os.path.join(os.path.expanduser(args.logs_base_dir), args.checkpoint)
+    model_dir = os.path.join(os.path.expanduser(args.models_base_dir), args.checkpoint)
+    assert(os.path.isdir(log_dir))
+    assert(os.path.isdir(model_dir))
+
+  else:
+    """Creating output directories"""
+    subdir = datetime.strftime(datetime.now(), '%Y%m%d-%H%M%S')
+    #save event logs (Tensorboard) to log_dir
+    log_dir = os.path.join(os.path.expanduser(args.logs_base_dir), subdir)
+    if not os.path.isdir(log_dir):  # Create the log directory if it doesn't exist
+        os.makedirs(log_dir)
+    #save checkpoints in model_dir
+    model_dir = os.path.join(os.path.expanduser(args.models_base_dir), subdir)
+    if not os.path.isdir(model_dir):  # Create the model directory if it doesn't exist
+        os.makedirs(model_dir)
 
   np.random.seed(seed=args.seed)
   print('Model directory: %s' % model_dir)
@@ -47,27 +57,34 @@ def train(args, hps):
 
   tf.set_random_seed(args.seed)
   learning_rate_placeholder = tf.placeholder(tf.float32, name='learning_rate')
+  eval_images_placeholder = tf.placeholder(tf.float32, shape=(None, IM_HEIGHT, IM_WIDTH, 3), name='eval_input')
 
-  """ Create pretraining model and queue runner """
-  runner_pretrain = fashionStyle128_input.ImageRunner(dataset, args.pretrain_batch_size, prefix='pretrain_')
-  image_batch_pretrain, label_batch_pretrain = runner_pretrain.get_inputs()
-  model_pretrain = fashionStyle128_model.Style128Net(hps, image_batch_pretrain, label_batch_pretrain, 'pretrain', learning_rate_placeholder)
-  model_pretrain.build_graph()
+
+
+  if len(args.checkpoint) == 0: #Train from scratch.
+    """ Create pretraining model and queue runner """
+    runner_pretrain = fashionStyle128_input.ImageRunner(dataset, args.pretrain_batch_size, prefix='pretrain_')
+    image_batch_pretrain, label_batch_pretrain = runner_pretrain.get_inputs()
+    model_pretrain = fashionStyle128_model.Style128Net(hps, image_batch_pretrain, label_batch_pretrain, 'pretrain', learning_rate_placeholder)
+    model_pretrain.build_graph()
+    eval_model_pretrain = fashionStyle128_model.Style128Net(hps, eval_images_placeholder, None, 'pretrain_forward')
+    eval_model_pretrain.build_graph()
+
 
   """Create joint training model and queue runner """
   runner_joint = fashionStyle128_input.TripletRunner(dataset, args.batch_size, prefix='triplet_')
   image_batch_joint, label_batch_joint = runner_joint.get_inputs()
   model = fashionStyle128_model.Style128Net(hps, image_batch_joint, label_batch_joint, 'joint', learning_rate_placeholder)
-  model.build_graph()
+  model.build_graph(restore_checkpoint = len(args.checkpoint) > 0)
+  # restore from checkpoint = True will not share weights with pretrain model since pretrain model doesn't exist.
 
   """ Build evaluation (forward prop) models for pretraining and joint training"""
-  eval_images_placeholder = tf.placeholder(tf.float32, shape=(None, IM_HEIGHT, IM_WIDTH, 3), name='eval_input')
-
-  eval_model_pretrain = fashionStyle128_model.Style128Net(hps, eval_images_placeholder, None, 'pretrain_forward')
-  eval_model_pretrain.build_graph()
-
   eval_model = fashionStyle128_model.Style128Net(hps, eval_images_placeholder, None, 'joint_forward')
   eval_model.build_graph()
+
+
+
+
 
 
   global_step = tf.Variable(0, name='global_step', trainable=False)
@@ -87,11 +104,16 @@ def train(args, hps):
 
 
   tf.train.start_queue_runners(sess=sess) #not sure
-  runner_pretrain.start_threads(sess)
   runner_joint.start_threads(sess)
-
-  epoch_pretrain = 0
+  epoch_pretrain = args.nrof_pretrain_epochs
   epoch_joint = 0
+
+  if len(args.checkpoint) == 0:
+    runner_pretrain.start_threads(sess)
+    epoch_pretrain = 0
+
+
+
   while not sv.should_stop() and epoch_pretrain + epoch_joint < args.max_nrof_epochs + args.nrof_pretrain_epochs:
     if epoch_pretrain < args.nrof_pretrain_epochs:
       if epoch_pretrain == 0:
@@ -117,10 +139,13 @@ def train(args, hps):
 
     print('Model directory: %s' % model_dir)
     print('Log directory: %s' % log_dir)
-    step_pretrain = sess.run(model_pretrain.global_step, feed_dict=None)
-    step_joint = sess.run(model.global_step, feed_dict=None)
-    step_cumulative = sess.run(global_step)
-    assert(step_pretrain + step_joint == step_cumulative)
+
+    if len(args.checkpoint) == 0: #training from scratch, so model_pretrain exists
+      step_pretrain = sess.run(model_pretrain.global_step, feed_dict=None)
+      step_joint = sess.run(model.global_step, feed_dict=None)
+      step_cumulative = sess.run(global_step)
+      assert(step_pretrain + step_joint == step_cumulative)
+    
 
   sv.Stop()
 
@@ -145,6 +170,7 @@ def train_one_epoch(args, sess, model, dataset, epoch, summary_writer, inc_globa
     batch_number += 1
   return step, step_cumulative
 
+
 def validate_embedding_step(args, sess, model, dataset, summary_writer, step, prefix='train'):
   """
   Run validation on the training and validation similar pairs.
@@ -161,7 +187,7 @@ def validate_embedding_step(args, sess, model, dataset, summary_writer, step, pr
   test_dist = fashionStyle128.compute_embedding_dist(test_embedding1, test_embedding2)
 
   """ Calculate evaluation metrics """
-  thresholds = np.arange(0, 10, 0.01)
+  thresholds = np.arange(0, 20, 0.01)
   train_roc, test_roc, threshold_roc = fashionStyle128.calculate_roc(
     thresholds,
     train_dist,
@@ -169,7 +195,7 @@ def validate_embedding_step(args, sess, model, dataset, summary_writer, step, pr
     np.asarray(train_actual_issimilar),
     np.asarray(test_actual_issimilar))
 
-  thresholds = np.arange(0, 10, 0.001)
+  thresholds = np.arange(0, 20, 0.001)
   far_target = args.far_target
   train_val_far, test_val_far, threshold_val = fashionStyle128.calculate_val(
     thresholds,
@@ -425,6 +451,10 @@ def parse_arguments(argv):
   parser.add_argument('--attribute_threshold', type=float,
       help='Threshold above which the score for an attribute is interpreted as positive.',
       default=0.6)
+
+  parser.add_argument('--checkpoint', type=str,
+    help='Path to checkpoint folder to restore model weights from.',
+    default='')
 
   return parser.parse_args(argv)
 

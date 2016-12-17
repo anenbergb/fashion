@@ -41,7 +41,7 @@ class Style128Net(object):
     self.kclasses = 123
       
 
-  def build_graph(self):
+  def build_graph(self, restore_checkpoint=False):
     """Build a whole graph for the model."""
     classification_network_scopes = {
       'pretrain' : 'cl_pretrain',
@@ -65,7 +65,7 @@ class Style128Net(object):
       self._build_train_op()
 
       #record images
-      util.add_to_collections(self.summary_collection, tf.image_summary(self.mode, self.images, max_images=10))
+      util.add_to_collections(self.summary_collection, tf.summary.image(self.mode, self.images, max_outputs=10))
       # Build the summary operation based on the TF collection of Summaries.
       self.summaries = tf.merge_all_summaries(key=self.summary_collection)
 
@@ -74,7 +74,11 @@ class Style128Net(object):
 
       self.global_step = tf.Variable(0, name='global_step_joint', trainable=False)
       #assumes that the network has been pre-trained in classification mode
-      self._build_embedding_network(reuse=True) 
+      # if training from scratch, then set reuse=True to reuse the weights learned by pretrain network
+      # if restoring from checkpoint, then we assume that we skip pretraining, so we do not load
+      # the pretrained weights, reuse = None
+
+      self._build_embedding_network(reuse = None if restore_checkpoint else True) 
       embedding_loss = self._build_embedding_loss()
       embedding_loss_s = tf.scalar_mul(1.0-self.hps.joint_loss_weight, embedding_loss)
 
@@ -101,7 +105,7 @@ class Style128Net(object):
       anchor, positive, negative = tf.split(0, 3, self.images)
       ims_concat = tf.concat(2, [negative, anchor, positive])
 
-      util.add_to_collections(self.summary_collection, tf.image_summary(self.mode, ims_concat, max_images=10))
+      util.add_to_collections(self.summary_collection, tf.summary.image(self.mode, ims_concat, max_outputs=10))
       # Build the summary operation based on the TF collection of Summaries.
       self.summaries = tf.merge_all_summaries(key=self.summary_collection)
 

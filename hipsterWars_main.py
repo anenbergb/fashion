@@ -60,7 +60,7 @@ def main(args):
     means = im_stats["mean_channels"]
     stds = im_stats["channel_std"]
     image_size = (384, 256)
-    logit_loader = lambda s, i: load_fashion128(s,i, args.checkpoint_path)
+    logit_loader = lambda s, i: load_fashion128_v12(s,i, args.checkpoint_path)
     fn_preprocess = lambda im: fashionStyle128_input.preprocess_tensor(
                                                   im,
                                                   image_size[0],
@@ -75,7 +75,11 @@ def main(args):
                                                         fn_preprocess,
                                                         batch_size=args.batch_size,
                                                         num_threads=args.num_threads)
-  sess = tf.Session()
+  
+  config=tf.ConfigProto( #log_device_placement=True,
+                     allow_soft_placement=True,
+                     intra_op_parallelism_threads=4)
+  sess = tf.Session(config=config)
   logits = logit_loader(sess, image_batch)
   
   # initialize the queue threads to start to shovel data
@@ -123,6 +127,16 @@ def load_fashion128(sess, input_tensor, checkpoint_path):
   saver.restore(sess, checkpoint_path)
   return model.embeddings
 
+def load_fashion128_v12(sess, input_tensor, checkpoint_path):
+  model = fashionStyle128_model.Style128Net(None, input_tensor, None, 'forward_reload')
+  model.build_graph()
+  pdb.set_trace()
+  saver = tf.train.import_meta_graph(checkpoint_path+".meta")
+  saver.restore(sess, checkpoint_path)
+
+  return model.embeddings
+
+  
 
 
 
