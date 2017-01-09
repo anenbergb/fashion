@@ -28,13 +28,14 @@ class DataSetClass():
     self.similar_pairs : pairs of images whose rscore is above 0.75
 
     only consider the self.single_mat (123) tags when training the classification network.
+    similar_pairs_pkl : full path to the pkl file.
     """
-    def __init__(self, dataset_path, similar_pairs_pkl, td=0.1, max_tries=300, stats_file='/cvgl/u/anenberg/Fashion144k_stylenet_v1/stats/stats80554.npz'):
+    def __init__(self, dataset_path, similar_pairs_pkl, td=0.1, max_tries=300, stats_file='./data/stats80554.npz'):
         self.dataset_path = dataset_path
         self.color_mat = np.load(os.path.join(dataset_path,'feat/feat_col.npy'))
         self.single_mat = np.load(os.path.join(dataset_path,'feat/feat_sin.npy'))
         self.labels = np.hstack([self.color_mat, self.single_mat])
-        with open(os.path.join(dataset_path, similar_pairs_pkl), 'rb') as f:
+        with open(similar_pairs_pkl, 'rb') as f:
             self.similar_pairs = pickle.load(f)
             self.sim_pairs_list = self.similar_pairs.keys()
 

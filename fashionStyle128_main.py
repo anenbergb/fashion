@@ -49,7 +49,7 @@ def train(args, hps):
   print('Model directory: %s' % model_dir)
 
   """Creating dataset """
-  dataset = fashionStyle128_input.DataSetClass(args.data_dir, "similar_pairs.pkl2", stats_file=args.dataset_stats_file)
+  dataset = fashionStyle128_input.DataSetClass(args.data_dir, args.similar_pairs_pkl, stats_file=args.dataset_stats_file)
 
   """Creating Hipster Wars dataset """
   dataset_hipster = hipsterWars_input.DataSetClass(args.data_dir_hipster, stats_file=args.dataset_stats_file)
@@ -547,6 +547,10 @@ def parse_arguments(argv):
     help='Path to the .npz file containing the image means, channel means, and channel stds ' +
           'for the training dataset (fashion 144k)',
     default='/cvgl/u/anenberg/Fashion144k_stylenet_v1/stats/stats80554.npz')
+
+  parser.add_argument('--similar_pairs_pkl', type=str,
+  	help='Path to the .pkl file containing similar image pairs from the Fashion144k dataset',
+  	default='/cvgl/u/anenberg/Fashion144k_stylenet_v1/similar_pairs.pkl2')
 
 
 
