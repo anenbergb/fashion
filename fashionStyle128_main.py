@@ -14,6 +14,9 @@ from datetime import datetime
 import random
 import pdb
 
+from tensorflow.contrib.tensorboard.plugins import projector
+import hipsterWars_input
+from scipy import misc
 
 
 IM_HEIGHT = 384
@@ -31,18 +34,12 @@ def train(args, hps):
 
   if len(args.checkpoint) > 0:
     print("Restoring model from checkpoint at %s.\nSkipping pretraining"%(args.checkpoint))
-    log_dir = os.path.join(os.path.expanduser(args.logs_base_dir), args.checkpoint)
     model_dir = os.path.join(os.path.expanduser(args.models_base_dir), args.checkpoint)
-    assert(os.path.isdir(log_dir))
     assert(os.path.isdir(model_dir))
 
   else:
     """Creating output directories"""
     subdir = datetime.strftime(datetime.now(), '%Y%m%d-%H%M%S')
-    #save event logs (Tensorboard) to log_dir
-    log_dir = os.path.join(os.path.expanduser(args.logs_base_dir), subdir)
-    if not os.path.isdir(log_dir):  # Create the log directory if it doesn't exist
-        os.makedirs(log_dir)
     #save checkpoints in model_dir
     model_dir = os.path.join(os.path.expanduser(args.models_base_dir), subdir)
     if not os.path.isdir(model_dir):  # Create the model directory if it doesn't exist
@@ -50,10 +47,25 @@ def train(args, hps):
 
   np.random.seed(seed=args.seed)
   print('Model directory: %s' % model_dir)
-  print('Log directory: %s' % log_dir)
 
   """Creating dataset """
-  dataset = fashionStyle128_input.DataSetClass(args.data_dir, "similar_pairs.pkl2")
+  dataset = fashionStyle128_input.DataSetClass(args.data_dir, "similar_pairs.pkl2", stats_file=args.dataset_stats_file)
+
+  """Creating Hipster Wars dataset """
+  dataset_hipster = hipsterWars_input.DataSetClass(args.data_dir_hipster, stats_file=args.dataset_stats_file)
+  hipster_embeddings_var = tf.Variable(
+    initial_value=np.zeros((args.nrof_images_hipster, 128)),
+    validate_shape=False,
+    dtype=tf.float32,
+    trainable=False,
+    name='embedding_hipster')
+  hipster_embedding_placeholder = tf.placeholder(tf.float32, shape=(args.nrof_images_hipster, 128))
+  hipster_embed_assign_op = hipster_embeddings_var.assign(hipster_embedding_placeholder)
+  hipster_saver = tf.train.Saver([hipster_embeddings_var])
+  hipster_output_path = os.path.join(model_dir, 'embed')
+  os.makedirs(hipster_output_path)
+
+
 
   tf.set_random_seed(args.seed)
   learning_rate_placeholder = tf.placeholder(tf.float32, name='learning_rate')
@@ -87,20 +99,24 @@ def train(args, hps):
 
 
 
+  saver = tf.train.Saver()
   global_step = tf.Variable(0, name='global_step', trainable=False)
   inc_global_step_op = tf.assign_add(global_step, 1)
 
-  sv = tf.train.Supervisor(logdir=model_dir,
+  sv = tf.train.Supervisor(logdir=model_dir, #checkpoint model and save log events for tensorboard.
                            is_chief=True,
                            summary_op=None,
-                           save_summaries_secs=60,
-                           save_model_secs=500,
-                           global_step=global_step)
+                           save_model_secs=200,
+                           global_step=global_step,
+                           saver=saver)
   config=tf.ConfigProto( #log_device_placement=True,
                        allow_soft_placement=True,
                        intra_op_parallelism_threads=KTHREADS)
   sess = sv.prepare_or_wait_for_session(config=config)
-  summary_writer = tf.train.SummaryWriter(log_dir, sess.graph)
+
+  """ Hipster Wars evaluation summary writer"""
+  hipster_summary_writer = tf.summary.FileWriter(hipster_output_path, sess.graph)
+
 
 
   tf.train.start_queue_runners(sess=sess) #not sure
@@ -118,27 +134,28 @@ def train(args, hps):
     if epoch_pretrain < args.nrof_pretrain_epochs:
       if epoch_pretrain == 0:
         print("Beginning pretraining...")
-      step, step_cumulative = train_one_epoch(args, sess, model_pretrain, dataset, epoch_pretrain, summary_writer, inc_global_step_op, epoch_size= args.epoch_size_pretrain, prefix='Pretrain ')
+      step, step_cumulative = train_one_epoch(sv, args, sess, model_pretrain, dataset, epoch_pretrain, inc_global_step_op, epoch_size= args.epoch_size_pretrain, prefix='Pretrain ')
       
       print("Validation (embedding):")
-      validate_embedding_step(args, sess, eval_model_pretrain, dataset, summary_writer, step, prefix='pretrain')
+      validate_embedding_step(sv, args, sess, eval_model_pretrain, dataset, step, prefix='pretrain')
       print("Validation (attribute classification):")
-      validate_attribute_prediction_step(args, sess, eval_model_pretrain, dataset, summary_writer, step, prefix='pretrain')
+      validate_attribute_prediction_step(sv, args, sess, eval_model_pretrain, dataset, step, prefix='pretrain')
       epoch_pretrain = step // args.epoch_size_pretrain
     else:
       if epoch_joint == 0:
         print("Beginning joint training...")
 
-      step, step_cumulative = train_one_epoch(args, sess, model, dataset, epoch_joint, summary_writer, inc_global_step_op, epoch_size = args.epoch_size, prefix='Joint ')
+      step, step_cumulative = train_one_epoch(sv, args, sess, model, dataset, epoch_joint, inc_global_step_op, epoch_size = args.epoch_size, prefix='Joint ')
 
       print("Validation (embedding):")
-      validate_embedding_step(args, sess, eval_model, dataset, summary_writer, step, prefix='joint')
+      validate_embedding_step(sv, args, sess, eval_model, dataset, step, prefix='joint')
       print("Validation (attribute classification):")
-      validate_attribute_prediction_step(args, sess, eval_model, dataset, summary_writer, step, prefix='joint')
+      validate_attribute_prediction_step(sv, args, sess, eval_model, dataset, step, prefix='joint')
+      print("Hipster Wars embedding calculation:")
+      validate_HipsterWars_step(sv, args, sess, eval_model, dataset_hipster, step, model_dir, hipster_embeddings_var, hipster_saver, hipster_output_path, hipster_summary_writer, hipster_embedding_placeholder, hipster_embed_assign_op)
       epoch_joint = step // args.epoch_size
 
     print('Model directory: %s' % model_dir)
-    print('Log directory: %s' % log_dir)
 
     if len(args.checkpoint) == 0: #training from scratch, so model_pretrain exists
       step_pretrain = sess.run(model_pretrain.global_step, feed_dict=None)
@@ -151,39 +168,40 @@ def train(args, hps):
 
 
 
-def train_one_epoch(args, sess, model, dataset, epoch, summary_writer, inc_global_step, epoch_size = 10, prefix=''):
+def train_one_epoch(sv, args, sess, model, dataset, epoch, inc_global_step, epoch_size = 10, prefix=''):
   batch_number = 0
   while batch_number < epoch_size:
     start_time = time.time()
     feed_dict = {model.learning_rate_placeholder: args.learning_rate}
-    (_, summaries, loss, step, step_cumulative) = sess.run(
-      [model.train_op, model.summaries, model.loss,
+    (_, loss, step, step_cumulative) = sess.run(
+      [model.train_op, model.loss,
       model.global_step, inc_global_step],
       feed_dict=feed_dict)
-    duration = time.time() - start_time
     if step % 10 == 0:
-      summary_writer.add_summary(summaries, step) #step_cumulative
-      tf.logging.info('loss: %.3f\n' % (loss))
-      summary_writer.flush()
+      summaries = sess.run(model.summaries, feed_dict=feed_dict)
+      sv.summary_computed(sess, summaries)
+    duration = time.time() - start_time
+
+
     print(prefix+'Epoch: [%d][%d/%d]\tTime %.3f\tLoss %2.3f' %
           (epoch, batch_number+1, epoch_size, duration, loss))
     batch_number += 1
   return step, step_cumulative
 
 
-def validate_embedding_step(args, sess, model, dataset, summary_writer, step, prefix='train'):
+def validate_embedding_step(sv, args, sess, model, dataset, step, prefix='train'):
   """
-  Run validation on the training and validation similar pairs.
+  Run validation to determine quality of learned embedding on the training and validation similar pairs.
   """
   batch_size = 3*args.batch_size #batch size is the number of triples per batch.
 
 
   train_pairs, train_actual_issimilar = dataset.sample_k_pairs(nrof_similar=args.val_train_nrof_similar, nrof_dissimilar=args.val_train_nrof_dissimilar, split='train')
-  train_embedding1, train_embedding2 = fashionStyle128.evaluate_embedding(train_pairs, sess, model, dataset, batch_size)
+  train_embedding1, train_embedding2 = fashionStyle128.evaluate_embedding_pairs(train_pairs, sess, model, dataset, batch_size)
   train_dist = fashionStyle128.compute_embedding_dist(train_embedding1, train_embedding2)
 
   test_pairs, test_actual_issimilar = dataset.sample_k_pairs(nrof_similar=args.val_test_nrof_similar, nrof_dissimilar=args.val_test_nrof_dissimilar, split='test_or_valid')
-  test_embedding1, test_embedding2 = fashionStyle128.evaluate_embedding(test_pairs, sess, model, dataset, batch_size)
+  test_embedding1, test_embedding2 = fashionStyle128.evaluate_embedding_pairs(test_pairs, sess, model, dataset, batch_size)
   test_dist = fashionStyle128.compute_embedding_dist(test_embedding1, test_embedding2)
 
   """ Calculate evaluation metrics """
@@ -229,10 +247,10 @@ def validate_embedding_step(args, sess, model, dataset, summary_writer, step, pr
   summary.value.add(tag=prefix +'_validation/embedding/test/false_positive_rate', simple_value=fpr_test)
   summary.value.add(tag=prefix +'_validation/embedding/test/VAL_validation_rate', simple_value=val_test)
   summary.value.add(tag=prefix +'_validation/embedding/test/FAR_false_accept_rate', simple_value=far_test)
-  summary_writer.add_summary(summary, step)
+  sv.summary_computed(sess, summary)
   
 
-def validate_attribute_prediction_step(args, sess, model, dataset, summary_writer, step, prefix='train'):
+def validate_attribute_prediction_step(sv, args, sess, model, dataset, step, prefix='train'):
   """
   Calculate the attribute prediction performance on training and validation dataset splits.
   """
@@ -300,7 +318,65 @@ def validate_attribute_prediction_step(args, sess, model, dataset, summary_write
   summary.value.add(tag=prefix + '_validation/attribute/test/top_recall/9', simple_value=test_top_k_recall[8])
   summary.value.add(tag=prefix + '_validation/attribute/test/top_recall/10', simple_value=test_top_k_recall[9])
 
-  summary_writer.add_summary(summary, step)
+  sv.summary_computed(sess, summary)
+
+
+
+def validate_HipsterWars_step(sv, args, sess, model, dataset, step, model_dir, embed_var, saver, output_path, summary_writer, placeholder, assign_op):
+  """
+  Run the model on the Hipster Wars dataset to get an embedding vector per HipsterWar image.
+  Evaluate whether images of the same style (Bohemian, goth, etc.) have small euclidean distance.
+
+
+  dataset : refers to the hipster wars dataset.
+  """
+  batch_size = 3*args.batch_size #batch size is the number of triples per batch.
+  max_nrof_images_hipster = 2916
+  """
+  Maximum size sprite currenty supported is 8192px X 8192px.
+  Each thumbnail image is assumed to be of size 150 x 100.
+  Sprite should have the same number of rows and columns with thumbnails stored in row-first order.
+  Thus, the sprite will be 54 x 54 in dimension maximum which equates to 8100px x 8100px.
+  """
+  nrof_images = min(max_nrof_images_hipster, args.nrof_images_hipster)
+  ids = dataset.sample_k(k=nrof_images)
+  emb_array, labels_array = fashionStyle128.evaluate_embedding(ids, sess, model, dataset, batch_size, normalize=True, rescale=(384, 256))
+  
+  #emb_tensor = tf.Variable(emb_array, name='embedding_hipster', trainable=False)
+  #sess.run(emb_tensor.initializer)
+  #sess.run(nop, feed_dict = {placeholder : emb_array})
+  #emb_tensor = tf.convert_to_tensor(emb_array, name='emb_array_convert_to_tensor')
+
+  sess.run(assign_op, feed_dict={placeholder : emb_array})
+  config = projector.ProjectorConfig()
+  embedding = config.embeddings.add()
+  embedding.tensor_name = embed_var.name
+
+
+  embedding.metadata_path = os.path.join(output_path, 'labels.tsv')
+  sprite_png = os.path.join(output_path, 'sprite.png')
+  embedding.sprite.image_path = sprite_png
+  embedding.sprite.single_image_dim.extend([args.emb_thumbnail_w, args.emb_thumbnail_h])
+  projector.visualize_embeddings(summary_writer, config)
+  saver.save(sess, os.path.join(output_path, 'model.ckpt'), sv.global_step)
+
+  ## Make sprite and labels.
+  #images = np.array(all_images).reshape(
+  #        -1, thumbnail_size, thumbnail_size).astype(np.float32)
+  #sprite = images_to_sprite(images)
+  #scipy.misc.imsave(os.path.join(output_path, 'sprite.png'), sprite)
+  #all_labels = np.array(all_labels).flatten()
+
+  with open(os.path.join(output_path, 'labels.tsv'), 'w') as f:
+    f.write('Category\n')
+    for category_id in labels_array[:-1]:
+      f.write('%s\n' % (dataset.label2category[np.int(category_id)]))
+    f.write('%s' % (dataset.label2category[np.int(labels_array[-1])]))
+
+  # Create sprite and save it to disk.
+  sprite = dataset.images_to_sprite(ids, h=args.emb_thumbnail_h, w=args.emb_thumbnail_w)
+  misc.imsave(sprite_png, sprite)
+
 
 
 
@@ -354,11 +430,8 @@ def parse_arguments(argv):
   parser.add_argument('--mode', type=str, choices=['train', 'eval'], 
     help='train or eval.', default='train')
 
-  parser.add_argument('--logs_base_dir', type=str, 
-    help='Directory where to write event logs.',
-    default='/cvgl/u/anenberg/CS331B/logs')
   parser.add_argument('--models_base_dir', type=str,
-    help='Directory where to write trained models and checkpoints.',
+    help='Directory where to write trained models, checkpoints, and event logs.',
     default='/cvgl/u/anenberg/CS331B/models')
 
   parser.add_argument('--data_dir', type=str,
@@ -455,6 +528,27 @@ def parse_arguments(argv):
   parser.add_argument('--checkpoint', type=str,
     help='Path to checkpoint folder to restore model weights from.',
     default='')
+
+  parser.add_argument('--data_dir_hipster', type=str,
+    help='Path to the data directory containing the hipster wars dataset.',
+    default='/cvgl/u/anenberg/hipsterwars_v1.0')
+  parser.add_argument('--nrof_images_hipster', type=int,
+      help='Number of images to sample from Hipster Wars dataset to ' +
+      'run embeddinging on.' , default=500)
+  parser.add_argument('--emb_thumbnail_w', type=int,
+      help='Size of the thumbnail width to display in the Tensorboard embedding visualization', 
+      default=100)
+  parser.add_argument('--emb_thumbnail_h', type=int,
+      help='Size of the thumbnail width to display in the Tensorboard embedding visualization', 
+      default=150)
+
+
+  parser.add_argument('--dataset_stats_file', type=str,
+    help='Path to the .npz file containing the image means, channel means, and channel stds ' +
+          'for the training dataset (fashion 144k)',
+    default='/cvgl/u/anenberg/Fashion144k_stylenet_v1/stats/stats80554.npz')
+
+
 
   return parser.parse_args(argv)
 

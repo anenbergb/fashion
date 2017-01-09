@@ -29,7 +29,7 @@ class DataSetClass():
 
     only consider the self.single_mat (123) tags when training the classification network.
     """
-    def __init__(self, dataset_path, similar_pairs_pkl, td=0.1, max_tries=300):
+    def __init__(self, dataset_path, similar_pairs_pkl, td=0.1, max_tries=300, stats_file='/cvgl/u/anenberg/Fashion144k_stylenet_v1/stats/stats80554.npz'):
         self.dataset_path = dataset_path
         self.color_mat = np.load(os.path.join(dataset_path,'feat/feat_col.npy'))
         self.single_mat = np.load(os.path.join(dataset_path,'feat/feat_sin.npy'))
@@ -62,7 +62,7 @@ class DataSetClass():
 
 
         """ load image mean and std """
-        im_stats = np.load(os.path.join(dataset_path, "stats/stats80554.npz"))
+        im_stats = np.load(stats_file)
         self.mean = im_stats["mean"]
         self.channel_mean = im_stats["mean_channels"]
         self.channel_std = im_stats["channel_std"]

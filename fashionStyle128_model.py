@@ -11,7 +11,7 @@ from collections import namedtuple
 from tensorflow.python.training import moving_averages
 from tensorflow.python.ops import math_ops
 
-import fashionStyle128 as util
+# import fashionStyle128 as util
 import pdb
 
 HParams = namedtuple('HParams',
@@ -65,9 +65,9 @@ class Style128Net(object):
       self._build_train_op()
 
       #record images
-      util.add_to_collections(self.summary_collection, tf.summary.image(self.mode, self.images, max_outputs=10))
+      tf.summary.image(self.mode, self.images, max_outputs=10, collections=[self.summary_collection])
       # Build the summary operation based on the TF collection of Summaries.
-      self.summaries = tf.merge_all_summaries(key=self.summary_collection)
+      self.summaries = tf.summary.merge_all(key=self.summary_collection)
 
     elif self.mode == 'joint':
       self.summary_collection = 'SUMMARY_joint'
@@ -105,9 +105,10 @@ class Style128Net(object):
       anchor, positive, negative = tf.split(0, 3, self.images)
       ims_concat = tf.concat(2, [negative, anchor, positive])
 
-      util.add_to_collections(self.summary_collection, tf.summary.image(self.mode, ims_concat, max_outputs=10))
+      tf.summary.image(self.mode, ims_concat, max_outputs=10, collections=[self.summary_collection])
       # Build the summary operation based on the TF collection of Summaries.
-      self.summaries = tf.merge_all_summaries(key=self.summary_collection)
+      #self.summaries = tf.merge_all_summaries(key=self.summary_collection)
+      self.summaries = tf.summary.merge_all(key=self.summary_collection)
 
     elif self.mode == 'pretrain_forward':
       #Reuse the weights when evaluating during training.
@@ -294,7 +295,7 @@ class Style128Net(object):
       self.global_step,
       self.hps.learning_rate_decay_epochs*self.hps.epoch_size,
       self.hps.learning_rate_decay_factor, staircase=True)
-    util.add_to_collections(self.summary_collection, tf.scalar_summary(self.mode+'/'+'learning_rate', self.learning_rate))
+    tf.summary.scalar(self.mode+'/'+'learning_rate', self.learning_rate, collections=[self.summary_collection])
 
 
 
@@ -320,8 +321,10 @@ class Style128Net(object):
     for l in losses:
         # Name each loss as '(raw)' and name the moving average version of the loss
         # as the original loss name.
-        util.add_to_collections(self.summary_collection, tf.scalar_summary(self.mode+'/'+l.op.name +' (raw)', l))
-        util.add_to_collections(self.summary_collection, tf.scalar_summary(self.mode+'/'+l.op.name, loss_averages.average(l)))
+        
+        tf.summary.scalar(self.mode+'/'+l.op.name +' (raw)', l, collections=[self.summary_collection])
+        tf.summary.scalar(self.mode+'/'+l.op.name, loss_averages.average(l), collections=[self.summary_collection])
+
   
     return loss_averages_op
 
@@ -364,13 +367,13 @@ class Style128Net(object):
     # Add histograms for trainable variables.
     if log_histograms:
         for var in trainable_variables:
-            util.add_to_collections(self.summary_collection, tf.histogram_summary(self.mode+'/'+var.op.name, var))
+            tf.summary.histogram(self.mode+'/'+var.op.name, var, collections=[self.summary_collection])
    
     # Add histograms for gradients.
     if log_histograms:
         for grad, var in grads:
             if grad is not None:
-                util.add_to_collections(self.summary_collection, tf.histogram_summary(self.mode+'/'+var.op.name + '/gradients', grad))
+                tf.summary.histogram(self.mode+'/'+var.op.name + '/gradients', grad, collections=[self.summary_collection])
   
     # Track the moving averages of all trainable variables.
     variable_averages = tf.train.ExponentialMovingAverage(

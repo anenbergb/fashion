@@ -13,7 +13,7 @@ from scipy.special import expit
 
 
 
-def evaluate_embedding(pairs, sess, model, dataset, batch_size):
+def evaluate_embedding_pairs(pairs, sess, model, dataset, batch_size):
 
     pairs1 = []
     pairs2 = []
@@ -221,8 +221,32 @@ def compute_top_k_recall(y_true, y_pred, k=10):
 
 
 
+######################################################
+#################### Hipster Wars ####################
+######################################################
 
 
+def evaluate_embedding(ids, sess, model, dataset, batch_size, normalize=True, rescale=None):
+  """
+  ids are the indices of the images in the provided dataset. 
 
+  """
+
+  nrof_images = len(ids)
+  embedding_size = model.embeddings.get_shape()[1]
+  #embedding_size should be 128
+  emb_array = np.zeros((nrof_images, embedding_size))
+  labels_array = np.zeros((nrof_images,))
+
+  nrof_batches = int(math.ceil(1.0*nrof_images / batch_size))
+  for i in range(nrof_batches):
+    start_index = i*batch_size
+    end_index = min((i+1)*batch_size, nrof_images)
+    ids_batch = ids[start_index:end_index]
+    images, labels = dataset.load_images(ids_batch, normalize=normalize, rescale=rescale)
+    feed_dict = {model.images:images}
+    emb_array[start_index:end_index,:] = sess.run(model.embeddings, feed_dict=feed_dict)
+    labels_array[start_index:end_index] = labels
+  return emb_array, labels_array
 
 

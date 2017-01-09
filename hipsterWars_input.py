@@ -18,6 +18,7 @@ matplotlib.use('Agg')
 from matplotlib import pyplot as plt
 import textwrap as tw
 
+from collections import defaultdict
 
 class DataSetClass():
     """
@@ -58,6 +59,7 @@ class DataSetClass():
         self.image_id = image_id
         self.style_skill = style_skill
         self.category2label = category2label
+        self.label2category = ['Hipster', 'Goth', 'Preppy', 'Pinup', 'Bohemian']
         self.image_path = image_path
         self.category_id = np.array(category_id)
 
@@ -67,20 +69,20 @@ class DataSetClass():
         ret[:, :, 0] = ret[:, :, 1] = ret[:, :, 2] = img
         return ret
 
-    def imread(self, i, rescale=None, normalize=True):
+    def imread(self, i, rescale=None, normalize=True, dtype=np.float32):
         """
         Loads the i-th image in the hipster wars dataset and returns the label.
         Rescales the image to the same dimensions as 
         """
         assert(i < len(self.image_id))
-        im = misc.imread(self.image_path[i]).astype(np.float32)
+        im = misc.imread(self.image_path[i]).astype(dtype)
         if rescale is not None:
             im = misc.imresize(im, rescale)
         if normalize:
             im = (im - self.channel_mean) / self.channel_std
         return im, self.category_id[i]
 
-    def load_images(self, image_indices, normalize=True, rescale=None, preprocess=None):
+    def load_images(self, image_indices, normalize=True, rescale=None):
         """
         Normalizes the images by subtracting the channel_mean from each channel (RGB) and
         dividing each channel (RGB) by the channel's standard deviation. 
@@ -96,16 +98,90 @@ class DataSetClass():
             elif img.ndim == 3 and img.shape[2]>3:
                 img = img[:,:,0:3]
             if rescale is not None:
-                if preprocess is None:
-                    img = misc.imresize(img, rescale)
-                else:
-                    img = preprocess(img)
+                img = misc.imresize(img, rescale)
             images[i,:,:,:] = img
         images_float = images.astype(np.float32)
         if normalize:
             images_float = (images_float - self.channel_mean) / self.channel_std
 
-        return images_float, self.category_id[np.array(image_indices)]
+        return images_float, np.asarray(self.category_id[np.array(image_indices)])
+
+    def sample_k(self, k=100):
+        """
+        Samples k images from the dataset. Samples an equal number of images from
+        the categories.
+        """
+        category_id_dict = defaultdict(list)
+        for idx, category_id in enumerate(self.category_id):
+            category_id_dict[category_id].append(idx)
+        assert(len(category_id_dict) == len(self.category2label))
+
+        nrof_sampled = 0
+        count = 0
+        sample_ids = []
+        for category_id, idxs in category_id_dict.iteritems():
+            nrof_images_per_class = (k - nrof_sampled) / (len(category_id_dict) - count)
+            nrof_images_remainder = (k - nrof_sampled) % (len(category_id_dict) - count)
+            if nrof_images_remainder > 0:
+                nrof_images_per_class += 1
+
+            indices = np.arange(len(idxs))
+            if nrof_images_per_class < len(idxs):
+                indices = np.random.choice(indices, nrof_images_per_class, replace=False)
+            sample_ids += [idxs[i] for i in indices]
+            nrof_sampled += nrof_images_per_class
+            count += 1
+
+        return sample_ids
+
+
+
+    # def images_to_sprite(self, image_indices):
+    #     """Creates the sprite image along with any necessary padding
+
+    #     Args:
+    #       data: NxHxW[x3] tensor containing the images.
+
+    #     Returns:
+    #       data: Properly shaped HxWx3 image with any necessary padding.
+    #     """
+    #     if len(data.shape) == 3:
+    #         data = np.tile(data[...,np.newaxis], (1,1,1,3))
+    #     data = data.astype(np.float32)
+    #     min = np.min(data.reshape((data.shape[0], -1)), axis=1)
+    #     data = (data.transpose(1,2,3,0) - min).transpose(3,0,1,2)
+    #     max = np.max(data.reshape((data.shape[0], -1)), axis=1)
+    #     data = (data.transpose(1,2,3,0) / max).transpose(3,0,1,2)
+    #     # Inverting the colors seems to look better for MNIST
+    #     data = 1 - data
+
+    #     n = int(np.ceil(np.sqrt(data.shape[0])))
+    #     padding = ((0, n ** 2 - data.shape[0]), (0, 0),
+    #             (0, 0)) + ((0, 0),) * (data.ndim - 3)
+    #     data = np.pad(data, padding, mode='constant',
+    #             constant_values=0)
+    #     # Tile the individual thumbnails into an image.
+    #     data = data.reshape((n, n) + data.shape[1:]).transpose((0, 2, 1, 3)
+    #             + tuple(range(4, data.ndim + 1)))
+    #     data = data.reshape((n * data.shape[1], n * data.shape[3]) + data.shape[4:])
+    #     data = (data * 255).astype(np.uint8)
+    #     return data
+
+
+    def images_to_sprite(self, image_indices, h=150, w=100):
+        nrof_images = len(image_indices)
+        row_count = int(np.ceil(np.sqrt(nrof_images)))
+        #pdb.set_trace()
+        G = np.zeros((row_count*h, row_count*w,3), dtype='uint8')
+        for i, im_idx in enumerate(image_indices):
+            #location
+            a = i / row_count
+            b = i % row_count
+            im, _ = self.imread(im_idx, rescale=(h,w,3), normalize=False, dtype=np.uint8)
+            G[a*h:(a+1)*h, b*w:(b+1)*w, :] = im
+        return G
+
+
 
 
 def preprocessBatchRunner(dataset, fn_preprocess, batch_size=50, num_threads=4):
